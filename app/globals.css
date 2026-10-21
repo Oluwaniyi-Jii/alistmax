@@ -1,0 +1,40 @@
+@import "tailwindcss";
+
+* { box-sizing: border-box; }
+html { background: #090909; scroll-behavior: smooth; }
+body { margin: 0; min-width: 320px; background: #090909; color: #f4f1ed; font-family: var(--font-manrope), "Segoe UI", sans-serif; font-feature-settings: "ss01" on; letter-spacing: -0.018em; }
+h1, h2, h3 { font-family: inherit; font-weight: 700; letter-spacing: -0.04em; }
+button, input { font: inherit; }
+button { cursor: pointer; }
+button:disabled { cursor: default; }
+::selection { background: #e31837; color: white; }
+
+html {
+  scrollbar-color: #b8142e #101010;
+  scrollbar-width: thin;
+}
+
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+::-webkit-scrollbar-track {
+  background: #101010;
+  border-left: 1px solid #24211f;
+}
+
+::-webkit-scrollbar-thumb {
+  min-height: 56px;
+  border: 4px solid #101010;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #e31837 0%, #941025 100%);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 18%);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, #ff3150 0%, #b8142e 100%);
+}
+
+::-webkit-scrollbar-corner { background: #101010; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
