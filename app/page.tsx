@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { CalendarDays, ChevronLeft, ChevronRight, Clock, LockKeyhole, MapPin, Plus, RotateCcw, Shuffle, SlidersHorizontal, X } from "lucide-react";
 import type { Showtime, TheatreOption } from "@/lib/types";
 
@@ -9,6 +9,8 @@ const today = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60000
 const idFor = (show: Showtime) => show.movieId ?? show.movieTitle.toLowerCase();
 const timeFor = (show: Showtime) => show.listedStartUtc ? new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", timeZone: show.theatreTimeZone ?? undefined }).format(new Date(show.listedStartUtc)) : "TBA";
 const startsAt = (show: Showtime) => show.listedStartUtc ? Date.parse(show.listedStartUtc) : Infinity;
+const isVisible = (show: Showtime, now = Date.now()) => !Number.isFinite(startsAt(show)) || startsAt(show) >= now - 25 * 60_000;
+const isUpcoming = (show: Showtime, now = Date.now()) => !Number.isFinite(startsAt(show)) || startsAt(show) > now;
 const runtimeFor = (minutes: number | null) => minutes ? `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, "0")}m` : "Runtime TBA";
 const A_LIST_LIMIT = 4;
 type Objective = "gaps" | "early" | "late";
@@ -45,9 +47,21 @@ export default function Home() {
   const [theatre, setTheatre] = useState<TheatreOption | null>(null); const [shows, setShows] = useState<Showtime[]>([]); const [chosen, setChosen] = useState<Showtime[]>([]); const [wanted, setWanted] = useState<Set<string>>(new Set()); const [locked, setLocked] = useState<Set<string>>(new Set());
   const [unavailablePicks, setUnavailablePicks] = useState<Showtime[]>([]);
   const [pendingTheatreId, setPendingTheatreId] = useState<string | null>(null);
+  const [now, setNow] = useState(() => Date.now());
   const [busy, setBusy] = useState(false); const [message, setMessage] = useState("");
   const [optionsOpen, setOptionsOpen] = useState(false); const [objective, setObjective] = useState<Objective>("gaps"); const [blockStart, setBlockStart] = useState(""); const [blockEnd, setBlockEnd] = useState("");
-  const films = useMemo(() => [...new Map(shows.map((show) => [idFor(show), show])).values()], [shows]);
+  const visibleShows = useMemo(() => shows.filter((show) => isVisible(show, now)), [shows, now]);
+  const films = useMemo(() => [...new Map(visibleShows.map((show) => [idFor(show), show])).values()], [visibleShows]);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => window.clearInterval(interval);
+  }, []);
+
+  const activeChosen = useMemo(
+    () => chosen.filter((show) => isUpcoming(show, now)),
+    [chosen, now],
+  );
 
   async function search(event: FormEvent) {
     event.preventDefault(); if (!/^\d{5}$/.test(zip)) { setMessage("Enter a five digit ZIP code."); return; }
@@ -78,19 +92,30 @@ export default function Home() {
     catch (reason) { setMessage(reason instanceof Error ? reason.message : "Unable to load showtimes."); } finally { setPendingTheatreId(null); setBusy(false); }
   }
   function choose(show: Showtime) {
-    if (chosen.some((entry) => entry.id === show.id)) {
+    if (activeChosen.some((entry) => entry.id === show.id)) {
       setWanted((current) => { const next = new Set(current); next.delete(idFor(show)); return next; });
       setLocked((current) => { const next = new Set(current); next.delete(idFor(show)); return next; });
-      setChosen((current) => current.filter((entry) => idFor(entry) !== idFor(show)));
+      setChosen((current) =>
+        current.filter(
+          (entry) => isUpcoming(entry) && idFor(entry) !== idFor(show),
+        ),
+      );
       return;
     }
     setWanted((current) => new Set(current).add(idFor(show)));
-    setChosen((current) => [...current.filter((entry) => idFor(entry) !== idFor(show)), show].sort((a, b) => startsAt(a) - startsAt(b)));
+    setChosen((current) =>
+      [
+        ...current.filter(
+          (entry) => isUpcoming(entry) && idFor(entry) !== idFor(show),
+        ),
+        show,
+      ].sort((a, b) => startsAt(a) - startsAt(b)),
+    );
   }
   function scheduleFor(wanted: Set<string>, goal = objective, availableShows = shows) {
     const titles = [...wanted].slice(0, A_LIST_LIMIT);
     const bits = new Map(titles.map((title, index) => [title, 1 << index]));
-    const options = availableShows.filter((show) => bits.has(idFor(show)) && Number.isFinite(startsAt(show)) && !isBlocked(show, blockStart, blockEnd)).sort((a, b) => startsAt(a) - startsAt(b));
+    const options = availableShows.filter((show) => bits.has(idFor(show)) && isUpcoming(show) && Number.isFinite(startsAt(show)) && !isBlocked(show, blockStart, blockEnd)).sort((a, b) => startsAt(a) - startsAt(b));
     const endings: Map<number, Route>[] = [];
     for (let index = 0; index < options.length; index += 1) {
       const current = options[index]; const bit = bits.get(idFor(current)); const routes = new Map<number, Route>();
@@ -138,11 +163,11 @@ export default function Home() {
     setLocked((current) => new Set([...current].filter((item) => item !== key)));
     setUnavailablePicks((current) => current.filter((item) => idFor(item) !== key));
   }
-  const excluded = films.filter((film) => wanted.has(idFor(film)) && !chosen.some((show) => idFor(show) === idFor(film)));
+  const excluded = films.filter((film) => wanted.has(idFor(film)) && !activeChosen.some((show) => idFor(show) === idFor(film)));
   const exclusionReason = (film: Showtime) => shows.some((show) => idFor(show) === idFor(film) && !isBlocked(show, blockStart, blockEnd)) ? "Does not fit with the rest of this run." : "Every screening conflicts with your blocked time.";
 
   return <main className="min-h-screen bg-[#090909] text-[#f4f1ed]">
-    <div className={`mx-auto max-w-[1600px] px-4 py-4 sm:px-7 sm:py-7 ${chosen.length > 0 ? "pb-24 sm:pb-7" : ""}`}>
+    <div className={`mx-auto max-w-[1600px] px-4 py-4 sm:px-7 sm:py-7 ${activeChosen.length > 0 ? "pb-24 sm:pb-7" : ""}`}>
       <form onSubmit={search} className="grid border border-[#302b29] bg-[#111] md:grid-cols-[1fr_1fr_auto]">
         <label className="flex min-h-16 items-center gap-3 border-b border-[#302b29] px-4 md:border-r md:border-b-0"><MapPin size={18} className="text-[#e31837]" /><input value={zip} onChange={(e) => setZip(e.target.value.replace(/\D/g, "").slice(0, 5))} placeholder="ZIP code" inputMode="numeric" className="w-full bg-transparent text-sm outline-none placeholder:text-[#7d7670]" /></label>
         <div className="border-b border-[#302b29] md:border-r md:border-b-0"><DatePicker value={date} onChange={setDate} /></div>
@@ -163,17 +188,27 @@ export default function Home() {
               </li>)}
             </ul>
           </div>}
-          <div className="grid grid-cols-1 gap-px bg-[#302b29] min-[420px]:grid-cols-2 sm:grid-cols-3 2xl:grid-cols-4">{films.map((film) => { const selectedShow = chosen.find((show) => idFor(show) === idFor(film)); const selectedFilm = wanted.has(idFor(film)); const showings = shows.filter((show) => idFor(show) === idFor(film)); return <article key={idFor(film)} onClick={() => addFilm(film)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); addFilm(film); } }} role="button" tabIndex={0} aria-pressed={selectedFilm} className={`relative min-h-[320px] cursor-pointer overflow-hidden bg-[#111] p-3 outline-none transition hover:z-10 hover:brightness-110 focus-visible:ring-2 focus-visible:ring-[#e31837] min-[420px]:min-h-[280px] sm:min-h-[300px] sm:p-4 xl:min-h-[380px] ${selectedFilm ? "ring-1 ring-inset ring-[#e31837]" : ""}`}>
+          {films.length === 0 ? (
+            <p className="border-y border-[#302b29] py-10 text-sm text-[#aaa29a]">
+              No screenings remain at this theatre for the selected date.
+            </p>
+          ) : (
+            <>
+          <p className="mb-3 text-[10px] uppercase tracking-[.12em] text-[#837b74]">Showtimes disappear 25 minutes after their listed start</p>
+          <div className="grid grid-cols-1 gap-px bg-[#302b29] min-[420px]:grid-cols-2 sm:grid-cols-3 2xl:grid-cols-4">{films.map((film) => { const selectedShow = activeChosen.find((show) => idFor(show) === idFor(film)); const selectedFilm = wanted.has(idFor(film)); const showings = visibleShows.filter((show) => idFor(show) === idFor(film)); return <article key={idFor(film)} onClick={() => addFilm(film)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); addFilm(film); } }} role="button" tabIndex={0} aria-pressed={selectedFilm} className={`relative min-h-[320px] cursor-pointer overflow-hidden bg-[#111] p-3 outline-none transition hover:z-10 hover:brightness-110 focus-visible:ring-2 focus-visible:ring-[#e31837] min-[420px]:min-h-[280px] sm:min-h-[300px] sm:p-4 xl:min-h-[380px] ${selectedFilm ? "ring-1 ring-inset ring-[#e31837]" : ""}`}>
           {film.posterUrl && <Image src={film.posterUrl} alt="" fill unoptimized sizes="25vw" className="object-cover opacity-55" />}<div className="absolute inset-0 bg-gradient-to-t from-[#090909] via-[#090909]/35 to-transparent" />
-          <div className="relative flex h-full flex-col items-start"><span className="bg-[#151414]/85 px-2.5 py-1 text-[9px] font-semibold uppercase tracking-[.16em] text-[#e8e2da]">{runtimeFor(film.runtimeMinutes)}</span><div className="mt-auto"><h2 className="text-xl font-bold leading-[1.02] tracking-[-.04em]">{film.movieTitle}</h2><div className="mt-4 flex flex-wrap gap-1.5">{showings.map((show) => <button key={show.id} onClick={(event) => { event.stopPropagation(); choose(show); }} className={`border px-2.5 py-2 text-[11px] font-bold transition ${selectedShow?.id === show.id ? "border-[#e31837] bg-[#e31837] text-white" : "border-white/30 bg-black/55 hover:border-white"}`}>{timeFor(show)}</button>)}</div></div></div>
-        </article>; })}</div></section>
-        <aside id="tonight" className="h-fit min-w-0 scroll-mt-4 border border-[#302b29] bg-[#111] p-4 sm:p-5 xl:sticky xl:top-5"><div className="flex items-center justify-between border-b border-[#302b29] pb-4"><span className="text-xs font-bold uppercase tracking-[.16em] text-[#e31837]">Tonight</span><span className="flex items-center gap-2"><button onClick={() => setOptionsOpen((open) => !open)} aria-expanded={optionsOpen} aria-label="Schedule options" className={`grid size-8 place-items-center border ${optionsOpen ? "border-[#e31837] text-[#e31837]" : "border-transparent text-[#aaa29a] hover:text-white"}`}><SlidersHorizontal size={16} /></button><button onClick={() => { setChosen([]); setWanted(new Set()); setLocked(new Set()); }} disabled={!chosen.length} aria-label="Clear schedule" className="text-[#aaa29a] hover:text-white disabled:opacity-30"><RotateCcw size={16} /></button></span></div>
+          <div className="relative flex h-full flex-col items-start"><span className="bg-[#151414]/85 px-2.5 py-1 text-[9px] font-semibold uppercase tracking-[.16em] text-[#e8e2da]">{runtimeFor(film.runtimeMinutes)}</span><div className="mt-auto"><h2 className="text-xl font-bold leading-[1.02] tracking-[-.04em]">{film.movieTitle}</h2><div className="mt-4 flex flex-wrap gap-1.5">{showings.map((show) => { const started = startsAt(show) <= now; return <button key={show.id} disabled={started} aria-label={started ? `${timeFor(show)} (already started)` : timeFor(show)} title={started ? "This screening has already started." : undefined} onClick={(event) => { event.stopPropagation(); choose(show); }} className={`border px-2.5 py-2 text-[11px] font-bold transition disabled:cursor-not-allowed disabled:opacity-50 ${selectedShow?.id === show.id ? "border-[#e31837] bg-[#e31837] text-white" : "border-white/30 bg-black/55 hover:border-white"}`}>{timeFor(show)}{started ? " · Started" : ""}</button>; })}</div></div></div>
+        </article>; })}</div>
+            </>
+          )}
+        </section>
+        <aside id="tonight" className="h-fit min-w-0 scroll-mt-4 border border-[#302b29] bg-[#111] p-4 sm:p-5 xl:sticky xl:top-5"><div className="flex items-center justify-between border-b border-[#302b29] pb-4"><span className="text-xs font-bold uppercase tracking-[.16em] text-[#e31837]">Tonight</span><span className="flex items-center gap-2"><button onClick={() => setOptionsOpen((open) => !open)} aria-expanded={optionsOpen} aria-label="Schedule options" className={`grid size-8 place-items-center border ${optionsOpen ? "border-[#e31837] text-[#e31837]" : "border-transparent text-[#aaa29a] hover:text-white"}`}><SlidersHorizontal size={16} /></button><button onClick={() => { setChosen([]); setWanted(new Set()); setLocked(new Set()); }} disabled={!activeChosen.length} aria-label="Clear schedule" className="text-[#aaa29a] hover:text-white disabled:opacity-30"><RotateCcw size={16} /></button></span></div>
           {optionsOpen && <div className="border-b border-[#302b29] py-4"><div className="grid gap-2"><span className="text-[10px] font-bold uppercase tracking-[.13em] text-[#837b74]">Optimize for</span><div className="grid grid-cols-3 gap-1">{([['gaps', 'Tight gaps'], ['early', 'Earlier'], ['late', 'Later']] as const).map(([value, label]) => <button key={value} onClick={() => { setObjective(value); setChosen(scheduleFor(wanted, value)); }} className={`border px-2 py-2 text-[10px] font-bold ${objective === value ? "border-[#e31837] bg-[#2a1116] text-white" : "border-[#39332f] text-[#aaa29a] hover:text-white"}`}>{label}</button>)}</div></div><div className="mt-4 grid grid-cols-2 gap-2"><label className="text-[10px] font-bold uppercase tracking-[.13em] text-[#837b74]">Busy from<input type="time" value={blockStart} onChange={(event) => { setBlockStart(event.target.value); }} onBlur={() => setChosen(scheduleFor(wanted))} className="mt-1 block h-9 w-full border border-[#39332f] bg-[#181716] px-2 text-xs text-white [color-scheme:dark]" /></label><label className="text-[10px] font-bold uppercase tracking-[.13em] text-[#837b74]">Until<input type="time" value={blockEnd} onChange={(event) => { setBlockEnd(event.target.value); }} onBlur={() => setChosen(scheduleFor(wanted))} className="mt-1 block h-9 w-full border border-[#39332f] bg-[#181716] px-2 text-xs text-white [color-scheme:dark]" /></label></div><button onClick={surprise} className="mt-4 flex w-full items-center justify-center gap-2 border border-[#39332f] py-2.5 text-[10px] font-bold uppercase tracking-[.13em] text-[#ddd6ce] hover:border-[#e31837]"><Shuffle size={14} /> Add a random movie</button></div>}
-          {chosen.length === 0 ? <div className="grid min-h-64 place-items-center text-center"><div><Plus className="mx-auto text-[#e31837]" /><p className="mt-3 text-sm text-[#99918a]">Choose up to {A_LIST_LIMIT} movies to start your run.</p></div></div> : <><ol className="divide-y divide-[#302b29]">{chosen.map((show, index) => <li key={show.id}><div className="flex gap-4 py-5"><button onClick={() => toggleLock(show)} aria-pressed={locked.has(idFor(show))} aria-label={`${locked.has(idFor(show)) ? "Unlock" : "Lock"} ${show.movieTitle}`} className={`grid size-6 shrink-0 place-items-center text-xs font-bold ${locked.has(idFor(show)) ? "bg-[#e31837] text-white" : "text-[#e31837] hover:bg-[#2a1116]"}`}>{locked.has(idFor(show)) ? <LockKeyhole size={12} /> : String(index + 1).padStart(2, "0")}</button><span className="min-w-0 flex-1"><span className="block text-sm font-bold leading-tight">{show.movieTitle}</span><span className="mt-1 flex items-center gap-1.5 text-xs text-[#aaa29a]"><Clock size={12} />{timeFor(show)} / {runtimeFor(show.runtimeMinutes)}</span></span><button onClick={() => choose(show)} aria-label={`Remove ${show.movieTitle}`} className="text-[#aaa29a] hover:text-white"><X size={15} /></button></div>{chosen[index + 1] && <p className="ml-10 -mt-2 pb-4 text-[10px] font-bold uppercase tracking-[.12em] text-[#d6a59e]">{Math.max(0, Math.round((startsAt(chosen[index + 1]) - startsAt(show) - ((show.runtimeMinutes ?? 110) + 30) * 60000) / 60000))} min between screenings</p>}</li>)}</ol>{excluded.length > 0 && <div className="border-t border-[#302b29] pt-4">{excluded.map((film) => <p key={idFor(film)} className="mb-2 text-xs text-[#d9a29b]"><span className="font-bold text-[#f1ddd9]">{film.movieTitle}</span> / {exclusionReason(film)}</p>)}</div>}<button onClick={buildBest} className="mt-5 w-full border border-[#e31837] py-3 text-xs font-bold uppercase tracking-[.14em] text-[#fff] transition hover:bg-[#e31837]">Optimize showtimes</button><p className="mt-3 text-center text-[10px] leading-4 text-[#837b74]">Click a number to lock it, then randomize the rest.</p></>}
+          {activeChosen.length === 0 ? <div className="grid min-h-64 place-items-center text-center"><div><Plus className="mx-auto text-[#e31837]" /><p className="mt-3 text-sm text-[#99918a]">Choose up to {A_LIST_LIMIT} movies to start your run.</p></div></div> : <><ol className="divide-y divide-[#302b29]">{activeChosen.map((show, index) => <li key={show.id}><div className="flex gap-4 py-5"><button onClick={() => toggleLock(show)} aria-pressed={locked.has(idFor(show))} aria-label={`${locked.has(idFor(show)) ? "Unlock" : "Lock"} ${show.movieTitle}`} className={`grid size-6 shrink-0 place-items-center text-xs font-bold ${locked.has(idFor(show)) ? "bg-[#e31837] text-white" : "text-[#e31837] hover:bg-[#2a1116]"}`}>{locked.has(idFor(show)) ? <LockKeyhole size={12} /> : String(index + 1).padStart(2, "0")}</button><span className="min-w-0 flex-1"><span className="block text-sm font-bold leading-tight">{show.movieTitle}</span><span className="mt-1 flex items-center gap-1.5 text-xs text-[#aaa29a]"><Clock size={12} />{timeFor(show)} / {runtimeFor(show.runtimeMinutes)}</span></span><button onClick={() => choose(show)} aria-label={`Remove ${show.movieTitle}`} className="text-[#aaa29a] hover:text-white"><X size={15} /></button></div>{activeChosen[index + 1] && <p className="ml-10 -mt-2 pb-4 text-[10px] font-bold uppercase tracking-[.12em] text-[#d6a59e]">{Math.max(0, Math.round((startsAt(activeChosen[index + 1]) - startsAt(show) - ((show.runtimeMinutes ?? 110) + 30) * 60000) / 60000))} min between screenings</p>}</li>)}</ol>{excluded.length > 0 && <div className="border-t border-[#302b29] pt-4">{excluded.map((film) => <p key={idFor(film)} className="mb-2 text-xs text-[#d9a29b]"><span className="font-bold text-[#f1ddd9]">{film.movieTitle}</span> / {exclusionReason(film)}</p>)}</div>}<button onClick={buildBest} className="mt-5 w-full border border-[#e31837] py-3 text-xs font-bold uppercase tracking-[.14em] text-[#fff] transition hover:bg-[#e31837]">Optimize showtimes</button><p className="mt-3 text-center text-[10px] leading-4 text-[#837b74]">Click a number to lock it, then randomize the rest.</p></>}
         </aside>
       </div>}
-      {theatre && chosen.length > 0 && <a href="#tonight" aria-label={`View tonight's plan: ${chosen.length} ${chosen.length === 1 ? "movie" : "movies"}`} className="fixed inset-x-3 bottom-3 z-30 flex items-center justify-between gap-3 border border-[#6c2632] bg-[#171313]/95 px-4 py-3 shadow-[0_8px_30px_rgba(0,0,0,.65)] backdrop-blur xl:hidden">
-        <span className="min-w-0"><span className="block text-[10px] font-bold uppercase tracking-[.14em] text-[#e31837]">Tonight · {chosen.length} {chosen.length === 1 ? "movie" : "movies"}</span><span className="mt-1 block truncate text-xs text-[#eee8e2]">{chosen.map((show) => show.movieTitle).join(" · ")}</span></span>
+      {theatre && activeChosen.length > 0 && <a href="#tonight" aria-label={`View tonight's plan: ${activeChosen.length} ${activeChosen.length === 1 ? "movie" : "movies"}`} className="fixed inset-x-3 bottom-3 z-30 flex items-center justify-between gap-3 border border-[#6c2632] bg-[#171313]/95 px-4 py-3 shadow-[0_8px_30px_rgba(0,0,0,.65)] backdrop-blur xl:hidden">
+        <span className="min-w-0"><span className="block text-[10px] font-bold uppercase tracking-[.14em] text-[#e31837]">Tonight · {activeChosen.length} {activeChosen.length === 1 ? "movie" : "movies"}</span><span className="mt-1 block truncate text-xs text-[#eee8e2]">{activeChosen.map((show) => show.movieTitle).join(" · ")}</span></span>
         <span className="shrink-0 text-[10px] font-bold uppercase tracking-[.12em]">View plan</span>
       </a>}
     </div>
