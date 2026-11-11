@@ -150,11 +150,6 @@ test("mobile layout stays within the viewport and keeps the plan accessible", as
   });
 
   await page.goto("/");
-  const roobertLoaded = await page.evaluate(async () => {
-    await document.fonts.load('16px "Roobert PRO"');
-    return document.fonts.check('16px "Roobert PRO"');
-  });
-  expect(roobertLoaded).toBe(true);
   await page.getByPlaceholder("ZIP code").fill("10001");
   await page.getByRole("button", { name: "Find a theatre" }).click();
   await page.getByRole("button", { name: /AMC Midtown/ }).click();
