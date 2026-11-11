@@ -152,7 +152,7 @@ test("mobile layout stays within the viewport and keeps the plan accessible", as
   await page.goto("/");
   await page.getByPlaceholder("ZIP code").fill("10001");
   await page.getByRole("button", { name: "Find a theatre" }).click();
-  await page.getByRole("button", { name: /AMC Midtown/ }).click();
+  await page.getByRole("button", { name: /AMC Midtown/ }).first().click();
   await expect(page.getByText("First Feature")).toBeVisible();
   await expect(page.getByText(/Showtimes disappear 25 minutes/)).toBeVisible();
   await expect(page.getByText("Already Started")).toHaveCount(0);
@@ -199,18 +199,73 @@ test("mobile layout stays within the viewport and keeps the plan accessible", as
   await expect(page).toHaveURL(/#tonight$/);
   await expect(page.locator("#tonight")).toBeVisible();
 
-  await page.getByRole("button", { name: /AMC Uptown/ }).click();
+  await page.getByRole("button", { name: /AMC Uptown/ }).first().click();
   await expect(page.locator("#tonight").getByText("First Feature", { exact: true })).toBeVisible();
   await expect(page.locator("#tonight")).toContainText("First Feature");
   await expect(
     page.getByRole("button", { name: "Unlock First Feature" }),
   ).toHaveAttribute("aria-pressed", "true");
 
-  await page.getByRole("button", { name: /AMC Downtown/ }).click();
+  await page.getByRole("button", { name: /AMC Downtown/ }).first().click();
   await expect(page.locator('p[role="alert"]')).toContainText("temporarily unavailable");
   await expect(page.locator("#tonight").getByText("First Feature", { exact: true })).toBeVisible();
   await expect(page.locator("#tonight")).toContainText("First Feature");
   await expect(
     page.getByRole("button", { name: "Unlock First Feature" }),
   ).toHaveAttribute("aria-pressed", "true");
+});
+
+test("restores preferred cinemas above the ZIP search and loads one without searching again", async ({
+  page,
+}) => {
+  await page.route("**/api/showtimes?*", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.get("mode") === "theatres") {
+      await route.fulfill({
+        json: {
+          zip: url.searchParams.get("zip"),
+          date: url.searchParams.get("date"),
+          theatres: [{
+            id: "42",
+            name: "AMC Midtown",
+            address: "123 Broadway",
+            city: "New York",
+            state: "NY",
+          }],
+        },
+      });
+      return;
+    }
+    await route.fulfill({
+      json: {
+        zip: url.searchParams.get("zip"),
+        date: url.searchParams.get("date"),
+        results,
+      },
+    });
+  });
+
+  await page.goto("/");
+  await page.getByPlaceholder("ZIP code").fill("10001");
+  await page.getByRole("button", { name: "Find a theatre" }).click();
+  await page.getByRole("button", {
+    name: "Save AMC Midtown as preferred cinema",
+  }).click();
+  await expect(page.getByRole("button", {
+    name: "Remove AMC Midtown from preferred cinemas",
+  })).toHaveAttribute("aria-pressed", "true");
+
+  await page.getByPlaceholder("ZIP code").fill("90210");
+  await page.reload();
+  const preferredSection = page.getByRole("region", { name: "Preferred cinemas" });
+  await expect(preferredSection).toBeVisible();
+  await expect(page.getByPlaceholder("ZIP code")).toHaveValue("10001");
+  const preferredBounds = await preferredSection.boundingBox();
+  const searchBounds = await page.locator("form").boundingBox();
+  expect(preferredBounds).not.toBeNull();
+  expect(searchBounds).not.toBeNull();
+  expect(preferredBounds!.y + preferredBounds!.height).toBeLessThan(searchBounds!.y);
+
+  await preferredSection.getByRole("button", { name: /AMC Midtown/ }).first().click();
+  await expect(page.getByText("First Feature")).toBeVisible();
 });

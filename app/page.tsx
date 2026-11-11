@@ -13,8 +13,30 @@ const isVisible = (show: Showtime, now = Date.now()) => !Number.isFinite(startsA
 const isUpcoming = (show: Showtime, now = Date.now()) => !Number.isFinite(startsAt(show)) || startsAt(show) > now;
 const runtimeFor = (minutes: number | null) => minutes ? `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, "0")}m` : "Runtime TBA";
 const A_LIST_LIMIT = 4;
+const PREFERRED_THEATRES_KEY = "alistmax-preferred-cinemas-v1";
+const ZIP_CODE_KEY = "alistmax-last-zip-v1";
 type Objective = "gaps" | "early" | "late";
 type Route = { mask: number; shows: Showtime[]; gap: number };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isTheatreOption(value: unknown): value is TheatreOption {
+  return isRecord(value)
+    && typeof value.id === "string"
+    && typeof value.name === "string"
+    && (typeof value.address === "string" || value.address === null)
+    && (typeof value.city === "string" || value.city === null)
+    && (typeof value.state === "string" || value.state === null);
+}
+
+async function fetchTheatres(zip: string, date: string): Promise<TheatreOption[]> {
+  const response = await fetch(`/api/showtimes?zip=${zip}&date=${date}&mode=theatres`);
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.message);
+  return data.theatres;
+}
 
 function theatreMinute(show: Showtime) {
   if (!show.listedStartUtc) return -1;
@@ -44,6 +66,7 @@ function randomIndex(length: number) {
 
 export default function Home() {
   const [zip, setZip] = useState(""); const [date, setDate] = useState(today); const [theatres, setTheatres] = useState<TheatreOption[]>([]);
+  const [preferredTheatres, setPreferredTheatres] = useState<TheatreOption[]>([]);
   const [theatre, setTheatre] = useState<TheatreOption | null>(null); const [shows, setShows] = useState<Showtime[]>([]); const [chosen, setChosen] = useState<Showtime[]>([]); const [wanted, setWanted] = useState<Set<string>>(new Set()); const [locked, setLocked] = useState<Set<string>>(new Set());
   const [unavailablePicks, setUnavailablePicks] = useState<Showtime[]>([]);
   const [pendingTheatreId, setPendingTheatreId] = useState<string | null>(null);
@@ -58,16 +81,72 @@ export default function Home() {
     return () => window.clearInterval(interval);
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    async function restorePreferences() {
+      try {
+        const storedTheatres = window.localStorage.getItem(PREFERRED_THEATRES_KEY);
+        if (storedTheatres) {
+          const parsed: unknown = JSON.parse(storedTheatres);
+          if (!Array.isArray(parsed) || !parsed.every(isTheatreOption)) {
+            throw new Error("Invalid saved cinema preferences.");
+          }
+          if (!cancelled) setPreferredTheatres(parsed);
+        }
+        const storedZip = window.localStorage.getItem(ZIP_CODE_KEY);
+        if (storedZip !== null) {
+          if (!/^\d{5}$/.test(storedZip)) throw new Error("Invalid saved ZIP code.");
+          if (!cancelled) setZip(storedZip);
+        }
+      } catch {
+        if (!cancelled) setMessage("Unable to load saved cinema preferences. Please search again.");
+      }
+    }
+
+    void restorePreferences();
+    return () => { cancelled = true; };
+  }, []);
+
   const activeChosen = useMemo(
     () => chosen.filter((show) => isUpcoming(show, now)),
     [chosen, now],
   );
 
+  function persistPreferredTheatres(nextPreferredTheatres: TheatreOption[]) {
+    try {
+      window.localStorage.setItem(PREFERRED_THEATRES_KEY, JSON.stringify(nextPreferredTheatres));
+    } catch {
+      setMessage("Your preferred cinemas could not be saved on this browser.");
+    }
+  }
+
+  function persistZip(nextZip: string) {
+    try {
+      window.localStorage.setItem(ZIP_CODE_KEY, nextZip);
+    } catch {
+      setMessage("Your ZIP code could not be saved on this browser.");
+    }
+  }
+
   async function search(event: FormEvent) {
     event.preventDefault(); if (!/^\d{5}$/.test(zip)) { setMessage("Enter a five digit ZIP code."); return; }
-    setBusy(true); setMessage(""); setTheatre(null); setShows([]); setChosen([]); setWanted(new Set()); setLocked(new Set()); setUnavailablePicks([]); setPendingTheatreId(null);
-    try { const response = await fetch(`/api/showtimes?zip=${zip}&date=${date}&mode=theatres`); const data = await response.json(); if (!response.ok) throw new Error(data.message); setTheatres(data.theatres); if (!data.theatres.length) setMessage("No AMC theatres found for that date."); }
+    setBusy(true); setMessage(""); setTheatre(null); setShows([]); setChosen([]); setWanted(new Set()); setLocked(new Set()); setUnavailablePicks([]); setPendingTheatreId(null); setTheatres([]);
+    try {
+      const nextTheatres = await fetchTheatres(zip, date);
+      setTheatres(nextTheatres);
+      persistZip(zip);
+      if (!nextTheatres.length) setMessage("No AMC theatres found for that date.");
+    }
     catch (reason) { setMessage(reason instanceof Error ? reason.message : "Unable to load theatres."); } finally { setBusy(false); }
+  }
+  function togglePreferredTheatre(item: TheatreOption) {
+    const alreadyPreferred = preferredTheatres.some((saved) => saved.id === item.id);
+    const next = alreadyPreferred
+      ? preferredTheatres.filter((saved) => saved.id !== item.id)
+      : [...preferredTheatres, item];
+    setPreferredTheatres(next);
+    persistPreferredTheatres(next);
   }
   async function selectTheatre(next: TheatreOption) {
     setPendingTheatreId(next.id); setBusy(true); setMessage("");
@@ -88,6 +167,7 @@ export default function Home() {
       setTheatre(next);
       setShows(nextShows);
       setChosen(scheduleFor(wanted, objective, nextShows));
+      persistZip(zip);
     }
     catch (reason) { setMessage(reason instanceof Error ? reason.message : "Unable to load showtimes."); } finally { setPendingTheatreId(null); setBusy(false); }
   }
@@ -168,13 +248,50 @@ export default function Home() {
 
   return <main className="min-h-screen bg-[#090909] text-[#f4f1ed]">
     <div className={`mx-auto max-w-[1600px] px-4 py-4 sm:px-7 sm:py-7 ${activeChosen.length > 0 ? "pb-24 sm:pb-7" : ""}`}>
+      {preferredTheatres.length > 0 && <section aria-label="Preferred cinemas" className="mb-5">
+        <h2 className="mb-2 text-[10px] font-bold uppercase tracking-[.14em] text-[#e31837]">Preferred cinemas</h2>
+        <div className="flex snap-x snap-mandatory gap-2 overflow-x-auto pb-2">{preferredTheatres.map((item) => <div key={item.id} className="flex min-w-64 shrink-0 snap-start items-stretch border border-[#6c2632] bg-[#211215]">
+          <button type="button" disabled={busy} onClick={() => {
+            if (!/^\d{5}$/.test(zip)) {
+              setMessage("Enter a five digit ZIP code to load this cinema.");
+              document.getElementById("zip-code")?.focus();
+              return;
+            }
+            void selectTheatre(item);
+          }} className="min-w-0 flex-1 px-4 py-4 text-left disabled:cursor-wait disabled:opacity-60">
+            <span className="block truncate text-sm font-bold">{item.name}</span>
+            <span className="mt-1 block truncate text-xs text-[#99918a]">{[item.address, item.city, item.state].filter(Boolean).join(", ")}</span>
+          </button>
+          <button type="button" onClick={() => togglePreferredTheatre(item)} aria-pressed="true" aria-label={`Remove ${item.name} from preferred cinemas`} className="grid w-12 shrink-0 place-items-center border-l border-[#6c2632] text-white transition hover:bg-[#351a20] focus-visible:outline-2 focus-visible:outline-offset-[-3px] focus-visible:outline-[#e31837]">
+            <span aria-hidden="true" className="grid size-4 place-items-center border border-[#e31837] bg-[#2a1116]"><span className="size-2 bg-[#e31837]" /></span>
+          </button>
+        </div>)}</div>
+      </section>}
       <form onSubmit={search} className="grid border border-[#302b29] bg-[#111] md:grid-cols-[1fr_1fr_auto]">
-        <label className="flex min-h-16 items-center gap-3 border-b border-[#302b29] px-4 md:border-r md:border-b-0"><MapPin size={18} className="text-[#e31837]" /><input value={zip} onChange={(e) => setZip(e.target.value.replace(/\D/g, "").slice(0, 5))} placeholder="ZIP code" inputMode="numeric" className="w-full bg-transparent text-sm outline-none placeholder:text-[#7d7670]" /></label>
+        <label className="flex min-h-16 items-center gap-3 border-b border-[#302b29] px-4 md:border-r md:border-b-0"><MapPin size={18} className="text-[#e31837]" /><input id="zip-code" value={zip} onChange={(e) => setZip(e.target.value.replace(/\D/g, "").slice(0, 5))} placeholder="ZIP code" inputMode="numeric" className="w-full bg-transparent text-sm outline-none placeholder:text-[#7d7670]" /></label>
         <div className="border-b border-[#302b29] md:border-r md:border-b-0"><DatePicker value={date} onChange={setDate} /></div>
         <button disabled={busy} className="min-h-16 bg-[#e31837] px-8 text-xs font-bold uppercase tracking-[.16em] transition hover:bg-[#ca1430] disabled:opacity-50">{busy ? "Loading" : "Find a theatre"}</button>
       </form>
       {message && <p role="alert" aria-live="assertive" className="mt-3 border border-[#6c2632] bg-[#211215] px-4 py-3 text-sm text-[#f5bdc6]">{message}</p>}
-      {theatres.length > 0 && <div className="mt-5 flex snap-x snap-mandatory gap-2 overflow-x-auto pb-2">{theatres.map((item) => <button key={item.id} disabled={busy} onClick={() => selectTheatre(item)} className={`min-w-64 shrink-0 snap-start border px-4 py-4 text-left transition disabled:cursor-wait disabled:opacity-60 ${pendingTheatreId === item.id || (!pendingTheatreId && theatre?.id === item.id) ? "border-[#e31837] bg-[#2a1116]" : "border-[#302b29] bg-[#111] hover:border-[#736a63]"}`}><span className="block truncate text-sm font-bold">{item.name}</span><span className="mt-1 block truncate text-xs text-[#99918a]">{[item.address, item.city, item.state].filter(Boolean).join(", ")}</span></button>)}</div>}
+      {theatres.length > 0 && <div className="mt-5">
+        <p className="mb-2 text-[10px] uppercase tracking-[.12em] text-[#837b74]">Tap the box to save a preferred cinema on this browser</p>
+        <div className="flex snap-x snap-mandatory gap-2 overflow-x-auto pb-2">{theatres.map((item) => {
+          const isPreferred = preferredTheatres.some((saved) => saved.id === item.id);
+          const isSelected = pendingTheatreId === item.id || (!pendingTheatreId && theatre?.id === item.id);
+          return <div key={item.id} className={`flex min-w-64 shrink-0 snap-start items-stretch border transition ${isSelected ? "border-[#e31837] bg-[#2a1116]" : "border-[#302b29] bg-[#111] hover:border-[#736a63]"}`}>
+            <button type="button" disabled={busy} onClick={() => selectTheatre(item)} aria-pressed={theatre?.id === item.id && !pendingTheatreId} className="min-w-0 flex-1 px-4 py-4 text-left disabled:cursor-wait disabled:opacity-60">
+              <span className="block truncate text-sm font-bold">{item.name}</span>
+              <span className="mt-1 block truncate text-xs text-[#99918a]">{[item.address, item.city, item.state].filter(Boolean).join(", ")}</span>
+              {isPreferred && <span className="mt-2 block text-[9px] font-bold uppercase tracking-[.12em] text-[#f07a8d]">Preferred</span>}
+            </button>
+            <button type="button" onClick={() => togglePreferredTheatre(item)} aria-pressed={isPreferred} aria-label={`${isPreferred ? "Remove" : "Save"} ${item.name} ${isPreferred ? "from" : "as"} preferred cinema`} className="grid w-12 shrink-0 place-items-center border-l border-[#302b29] text-white transition hover:bg-[#25191b] focus-visible:outline-2 focus-visible:outline-offset-[-3px] focus-visible:outline-[#e31837]">
+              <span aria-hidden="true" className={`grid size-4 place-items-center border ${isPreferred ? "border-[#e31837] bg-[#2a1116]" : "border-[#837b74]"}`}>
+                {isPreferred && <span className="size-2 bg-[#e31837]" />}
+              </span>
+            </button>
+          </div>;
+        })}</div>
+      </div>}
       {pendingTheatreId && <p role="status" className="mt-3 border-l-2 border-[#e31837] pl-3 text-xs leading-5 text-[#aaa29a]">Loading {theatres.find((item) => item.id === pendingTheatreId)?.name}. Your current plan will stay in place until the new showtimes are ready.</p>}
       {busy && !theatre && <div className="grid min-h-[55vh] place-items-center"><span className="size-8 animate-spin rounded-full border-2 border-[#e31837] border-t-transparent" /></div>}
       {!busy && theatre && <div className="mt-6 grid min-w-0 gap-6 xl:grid-cols-[minmax(0,1fr)_370px]">
