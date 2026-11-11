@@ -1,8 +1,32 @@
 @import "tailwindcss";
 
+@font-face {
+  font-family: "Roobert PRO";
+  src: url("/fonts/RoobertPRO-Regular.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Roobert PRO";
+  src: url("/fonts/RoobertPRO-Medium.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Roobert PRO";
+  src: url("/fonts/RoobertPRO-Bold.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
 * { box-sizing: border-box; }
 html { background: #090909; scroll-behavior: smooth; }
-body { margin: 0; min-width: 320px; background: #090909; color: #f4f1ed; font-family: var(--font-manrope), "Segoe UI", sans-serif; font-feature-settings: "ss01" on; letter-spacing: -0.018em; }
+body { margin: 0; min-width: 320px; background: #090909; color: #f4f1ed; font-family: "Roobert PRO", "Segoe UI", sans-serif; font-feature-settings: "ss01" on; letter-spacing: -0.018em; }
 h1, h2, h3 { font-family: inherit; font-weight: 700; letter-spacing: -0.04em; }
 button, input { font: inherit; }
 button { cursor: pointer; }
@@ -35,6 +59,10 @@ html {
 ::-webkit-scrollbar-thumb:hover {
   background: linear-gradient(180deg, #ff3150 0%, #b8142e 100%);
 }
+
+#tonight a[target="_blank"] { height: 44px; min-width: 0; gap: .75rem; }
+#tonight a[target="_blank"] > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#tonight a[target="_blank"] > span:last-child { flex-shrink: 0; white-space: nowrap; }
 
 ::-webkit-scrollbar-corner { background: #101010; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }

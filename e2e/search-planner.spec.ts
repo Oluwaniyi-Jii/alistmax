@@ -19,7 +19,7 @@ const results = [
     city: "New York",
     state: "NY",
     format: [],
-    ticketUrl: null,
+    ticketUrl: "https://www.amctheatres.com/movies/first-feature",
   },
   {
     id: "42:102",
@@ -38,7 +38,7 @@ const results = [
     city: "New York",
     state: "NY",
     format: [],
-    ticketUrl: null,
+    ticketUrl: "https://www.amctheatres.com/movies/second-feature",
   },
   {
     id: "42:103",
@@ -150,6 +150,11 @@ test("mobile layout stays within the viewport and keeps the plan accessible", as
   });
 
   await page.goto("/");
+  const roobertLoaded = await page.evaluate(async () => {
+    await document.fonts.load('16px "Roobert PRO"');
+    return document.fonts.check('16px "Roobert PRO"');
+  });
+  expect(roobertLoaded).toBe(true);
   await page.getByPlaceholder("ZIP code").fill("10001");
   await page.getByRole("button", { name: "Find a theatre" }).click();
   await page.getByRole("button", { name: /AMC Midtown/ }).click();
@@ -166,6 +171,26 @@ test("mobile layout stays within the viewport and keeps the plan accessible", as
   expect(documentWidths.scroll).toBeLessThanOrEqual(documentWidths.client);
 
   await page.locator('article[role="button"]').filter({ hasText: "First Feature" }).click();
+  const firstTicketLink = page.getByRole("link", { name: /Buy tickets · First Feature/ });
+  await expect(firstTicketLink).toHaveAttribute(
+    "href",
+    "https://www.amctheatres.com/movies/first-feature",
+  );
+  await expect(firstTicketLink).toHaveAttribute("target", "_blank");
+  await page.locator('article[role="button"]').filter({ hasText: "Second Feature" }).click();
+  await expect(
+    page.getByRole("link", { name: /Buy tickets · Second Feature/ }),
+  ).toHaveAttribute(
+    "href",
+    "https://www.amctheatres.com/movies/second-feature",
+  );
+  const ticketButtonHeights = await page
+    .getByRole("link", { name: /Buy tickets/ })
+    .evaluateAll((links) =>
+      links.map((link) => link.getBoundingClientRect().height),
+    );
+  expect(ticketButtonHeights).toEqual([44, 44]);
+  await page.getByRole("button", { name: "Remove Second Feature" }).click();
   await page.getByRole("button", { name: "Lock First Feature" }).click();
   const planShortcut = page.getByRole("link", {
     name: /View tonight's plan: 1 movie/,
@@ -180,7 +205,7 @@ test("mobile layout stays within the viewport and keeps the plan accessible", as
   await expect(page.locator("#tonight")).toBeVisible();
 
   await page.getByRole("button", { name: /AMC Uptown/ }).click();
-  await expect(page.locator("#tonight").getByText("First Feature")).toBeVisible();
+  await expect(page.locator("#tonight").getByText("First Feature", { exact: true })).toBeVisible();
   await expect(page.locator("#tonight")).toContainText("First Feature");
   await expect(
     page.getByRole("button", { name: "Unlock First Feature" }),
@@ -188,7 +213,7 @@ test("mobile layout stays within the viewport and keeps the plan accessible", as
 
   await page.getByRole("button", { name: /AMC Downtown/ }).click();
   await expect(page.locator('p[role="alert"]')).toContainText("temporarily unavailable");
-  await expect(page.locator("#tonight").getByText("First Feature")).toBeVisible();
+  await expect(page.locator("#tonight").getByText("First Feature", { exact: true })).toBeVisible();
   await expect(page.locator("#tonight")).toContainText("First Feature");
   await expect(
     page.getByRole("button", { name: "Unlock First Feature" }),
