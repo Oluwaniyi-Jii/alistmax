@@ -18,9 +18,6 @@ export async function GET(request: Request) {
   const mode = params.get("mode");
   const theatreId = params.get("theatreId");
 
-  if (!zip) {
-    return apiError(400, "invalid_zip", "Enter a valid five-digit US ZIP code.");
-  }
   if (!date) {
     return apiError(400, "invalid_date", "Choose a valid search date.");
   }
@@ -30,6 +27,12 @@ export async function GET(request: Request) {
     (mode === "theatres" && theatreId !== null)
   ) {
     return apiError(400, "invalid_search", "Choose a valid theatre search.");
+  }
+  if (mode === "theatres" && !zip) {
+    return apiError(400, "invalid_zip", "Enter a valid five-digit US ZIP code.");
+  }
+  if (theatreId === null && !zip) {
+    return apiError(400, "invalid_zip", "Enter a valid five-digit US ZIP code.");
   }
 
   const apiKey = process.env.AMC_VENDOR_API_KEY;
@@ -46,15 +49,18 @@ export async function GET(request: Request) {
   try {
     const provider = createAMCProvider(apiKey);
     if (mode === "theatres") {
+      if (!zip) {
+        return apiError(400, "invalid_zip", "Enter a valid five-digit US ZIP code.");
+      }
       const theatres = await provider.searchTheatres(zip, date);
       return NextResponse.json(
         { zip, date, theatres },
         { headers: { "Cache-Control": "no-store" } },
       );
     }
-    const results = await provider.search(zip, date, theatreId ?? undefined);
+    const results = await provider.search(zip ?? "", date, theatreId ?? undefined);
     return NextResponse.json(
-      { zip, date, results },
+      { zip: zip ?? "", date, results },
       { headers: { "Cache-Control": "no-store" } },
     );
   } catch (error) {

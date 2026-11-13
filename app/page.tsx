@@ -82,6 +82,12 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    if (!message) return;
+    const timeout = window.setTimeout(() => setMessage(""), 6_000);
+    return () => window.clearTimeout(timeout);
+  }, [message]);
+
+  useEffect(() => {
     let cancelled = false;
 
     async function restorePreferences() {
@@ -151,7 +157,9 @@ export default function Home() {
   async function selectTheatre(next: TheatreOption) {
     setPendingTheatreId(next.id); setBusy(true); setMessage("");
     try {
-      const response = await fetch(`/api/showtimes?zip=${zip}&date=${date}&theatreId=${next.id}`);
+      const query = new URLSearchParams({ date, theatreId: next.id });
+      if (/^\d{5}$/.test(zip)) query.set("zip", zip);
+      const response = await fetch(`/api/showtimes?${query}`);
       const data = await response.json();
       if (!response.ok) throw new Error(data.message);
       const nextShows: Showtime[] = data.results;
@@ -167,7 +175,7 @@ export default function Home() {
       setTheatre(next);
       setShows(nextShows);
       setChosen(scheduleFor(wanted, objective, nextShows));
-      persistZip(zip);
+      if (/^\d{5}$/.test(zip)) persistZip(zip);
     }
     catch (reason) { setMessage(reason instanceof Error ? reason.message : "Unable to load showtimes."); } finally { setPendingTheatreId(null); setBusy(false); }
   }
@@ -245,20 +253,17 @@ export default function Home() {
   }
   const excluded = films.filter((film) => wanted.has(idFor(film)) && !activeChosen.some((show) => idFor(show) === idFor(film)));
   const exclusionReason = (film: Showtime) => shows.some((show) => idFor(show) === idFor(film) && !isBlocked(show, blockStart, blockEnd)) ? "Does not fit with the rest of this run." : "Every screening conflicts with your blocked time.";
+  const theatreChoices = [
+    ...preferredTheatres,
+    ...theatres.filter((item) => !preferredTheatres.some((saved) => saved.id === item.id)),
+  ];
 
   return <main className="min-h-screen bg-[#090909] text-[#f4f1ed]">
     <div className={`mx-auto max-w-[1600px] px-4 py-4 sm:px-7 sm:py-7 ${activeChosen.length > 0 ? "pb-24 sm:pb-7" : ""}`}>
-      {preferredTheatres.length > 0 && <section aria-label="Preferred cinemas" className="mb-5">
+      {preferredTheatres.length > 0 && theatres.length === 0 && <section aria-label="Preferred cinemas" className="mb-5">
         <h2 className="mb-2 text-[10px] font-bold uppercase tracking-[.14em] text-[#e31837]">Preferred cinemas</h2>
         <div className="flex snap-x snap-mandatory gap-2 overflow-x-auto pb-2">{preferredTheatres.map((item) => <div key={item.id} className="flex min-w-64 shrink-0 snap-start items-stretch border border-[#6c2632] bg-[#211215]">
-          <button type="button" disabled={busy} onClick={() => {
-            if (!/^\d{5}$/.test(zip)) {
-              setMessage("Enter a five digit ZIP code to load this cinema.");
-              document.getElementById("zip-code")?.focus();
-              return;
-            }
-            void selectTheatre(item);
-          }} className="min-w-0 flex-1 px-4 py-4 text-left disabled:cursor-wait disabled:opacity-60">
+          <button type="button" disabled={busy} onClick={() => void selectTheatre(item)} className="min-w-0 flex-1 px-4 py-4 text-left disabled:cursor-wait disabled:opacity-60">
             <span className="block truncate text-sm font-bold">{item.name}</span>
             <span className="mt-1 block truncate text-xs text-[#99918a]">{[item.address, item.city, item.state].filter(Boolean).join(", ")}</span>
           </button>
@@ -272,17 +277,17 @@ export default function Home() {
         <div className="border-b border-[#302b29] md:border-r md:border-b-0"><DatePicker value={date} onChange={setDate} /></div>
         <button disabled={busy} className="min-h-16 bg-[#e31837] px-8 text-xs font-bold uppercase tracking-[.16em] transition hover:bg-[#ca1430] disabled:opacity-50">{busy ? "Loading" : "Find a theatre"}</button>
       </form>
-      {message && <p role="alert" aria-live="assertive" className="mt-3 border border-[#6c2632] bg-[#211215] px-4 py-3 text-sm text-[#f5bdc6]">{message}</p>}
-      {theatres.length > 0 && <div className="mt-5">
+      {message && <div role="alert" aria-live="assertive" className="mt-3 flex items-start justify-between gap-4 border border-[#6c2632] bg-[#211215] px-4 py-3 text-sm text-[#f5bdc6]"><p>{message}</p><button type="button" onClick={() => setMessage("")} aria-label="Dismiss notification" className="shrink-0 text-[#f5bdc6] hover:text-white"><X size={16} /></button></div>}
+      {theatres.length > 0 && <div role="region" aria-label="Cinemas" className="mt-5">
         <p className="mb-2 text-[10px] uppercase tracking-[.12em] text-[#837b74]">Tap the box to save a preferred cinema on this browser</p>
-        <div className="flex snap-x snap-mandatory gap-2 overflow-x-auto pb-2">{theatres.map((item) => {
+        <div className="flex snap-x snap-mandatory gap-2 overflow-x-auto pb-2">{theatreChoices.map((item) => {
           const isPreferred = preferredTheatres.some((saved) => saved.id === item.id);
           const isSelected = pendingTheatreId === item.id || (!pendingTheatreId && theatre?.id === item.id);
           return <div key={item.id} className={`flex min-w-64 shrink-0 snap-start items-stretch border transition ${isSelected ? "border-[#e31837] bg-[#2a1116]" : "border-[#302b29] bg-[#111] hover:border-[#736a63]"}`}>
             <button type="button" disabled={busy} onClick={() => selectTheatre(item)} aria-pressed={theatre?.id === item.id && !pendingTheatreId} className="min-w-0 flex-1 px-4 py-4 text-left disabled:cursor-wait disabled:opacity-60">
               <span className="block truncate text-sm font-bold">{item.name}</span>
               <span className="mt-1 block truncate text-xs text-[#99918a]">{[item.address, item.city, item.state].filter(Boolean).join(", ")}</span>
-              {isPreferred && <span className="mt-2 block text-[9px] font-bold uppercase tracking-[.12em] text-[#f07a8d]">Preferred</span>}
+              {isPreferred && <span className="mt-2 block text-[9px] font-bold uppercase tracking-[.12em] text-[#f07a8d]">Preferred cinema</span>}
             </button>
             <button type="button" onClick={() => togglePreferredTheatre(item)} aria-pressed={isPreferred} aria-label={`${isPreferred ? "Remove" : "Save"} ${item.name} ${isPreferred ? "from" : "as"} preferred cinema`} className="grid w-12 shrink-0 place-items-center border-l border-[#302b29] text-white transition hover:bg-[#25191b] focus-visible:outline-2 focus-visible:outline-offset-[-3px] focus-visible:outline-[#e31837]">
               <span aria-hidden="true" className={`grid size-4 place-items-center border ${isPreferred ? "border-[#e31837] bg-[#2a1116]" : "border-[#837b74]"}`}>
@@ -344,5 +349,5 @@ function DatePicker({ value, onChange }: { value: string; onChange: (value: stri
   const label = new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric" }).format(cursor);
   function pick(day: number) { const next = new Date(year, month, day); if (next < minimum) return; onChange(`${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`); setOpen(false); }
   const canGoBack = year > minimum.getFullYear() || (year === minimum.getFullYear() && month > minimum.getMonth());
-  return <div className="relative"><button type="button" onClick={() => setOpen((state) => !state)} className="flex min-h-16 w-full items-center gap-3 px-4 text-left"><CalendarDays size={18} className="text-[#e31837]" /><span className="text-sm">{fmt.format(active)}</span></button>{open && <div className="absolute left-0 top-[calc(100%+8px)] z-30 w-[318px] border border-[#493f3b] bg-[#141313] p-4 shadow-[0_20px_60px_rgba(0,0,0,.6)]"><div className="mb-4 flex items-center justify-between"><button type="button" disabled={!canGoBack} onClick={() => setCursor(new Date(year, month - 1, 1))} className="grid size-8 place-items-center text-[#c7bfb8] hover:text-white disabled:opacity-20" aria-label="Previous month"><ChevronLeft size={18} /></button><span className="text-xs font-bold uppercase tracking-[.14em]">{label}</span><button type="button" onClick={() => setCursor(new Date(year, month + 1, 1))} className="grid size-8 place-items-center text-[#c7bfb8] hover:text-white" aria-label="Next month"><ChevronRight size={18} /></button></div><div className="grid grid-cols-7 text-center text-[10px] font-bold uppercase tracking-[.08em] text-[#756d66]">{["S", "M", "T", "W", "T", "F", "S"].map((day, index) => <span key={`${day}-${index}`} className="py-2">{day}</span>)}</div><div className="grid grid-cols-7">{cells.map((day, index) => { const cellDate = new Date(year, month, day); const unavailable = day <= 0 || day > days || cellDate < minimum; const selected = day > 0 && active.getFullYear() === year && active.getMonth() === month && active.getDate() === day; return <span key={index} className="grid aspect-square place-items-center">{day > 0 && day <= days && <button type="button" disabled={unavailable} onClick={() => pick(day)} className={`grid size-8 place-items-center rounded-full text-xs transition disabled:text-[#514b46] ${selected ? "bg-[#e31837] font-bold text-white" : "hover:bg-[#312c29]"}`}>{day}</button>}</span>; })}</div></div>}</div>;
+  return <div className="relative"><button type="button" aria-label="Choose date" onClick={() => setOpen((state) => !state)} className="flex min-h-16 w-full items-center gap-3 px-4 text-left"><CalendarDays size={18} className="text-[#e31837]" /><span className="text-sm">{fmt.format(active)}</span></button>{open && <div className="absolute left-0 top-[calc(100%+8px)] z-30 w-[318px] border border-[#493f3b] bg-[#141313] p-4 shadow-[0_20px_60px_rgba(0,0,0,.6)]"><div className="mb-4 flex items-center justify-between"><button type="button" disabled={!canGoBack} onClick={() => setCursor(new Date(year, month - 1, 1))} className="grid size-8 place-items-center text-[#c7bfb8] hover:text-white disabled:opacity-20" aria-label="Previous month"><ChevronLeft size={18} /></button><span className="text-xs font-bold uppercase tracking-[.14em]">{label}</span><button type="button" onClick={() => setCursor(new Date(year, month + 1, 1))} className="grid size-8 place-items-center text-[#c7bfb8] hover:text-white" aria-label="Next month"><ChevronRight size={18} /></button></div><div className="grid grid-cols-7 text-center text-[10px] font-bold uppercase tracking-[.08em] text-[#756d66]">{["S", "M", "T", "W", "T", "F", "S"].map((day, index) => <span key={`${day}-${index}`} className="py-2">{day}</span>)}</div><div className="grid grid-cols-7">{cells.map((day, index) => { const cellDate = new Date(year, month, day); const unavailable = day <= 0 || day > days || cellDate < minimum; const selected = day > 0 && active.getFullYear() === year && active.getMonth() === month && active.getDate() === day; return <span key={index} className="grid aspect-square place-items-center">{day > 0 && day <= days && <button type="button" disabled={unavailable} onClick={() => pick(day)} className={`grid size-8 place-items-center rounded-full text-xs transition disabled:text-[#514b46] ${selected ? "bg-[#e31837] font-bold text-white" : "hover:bg-[#312c29]"}`}>{day}</button>}</span>; })}</div></div>}</div>;
 }

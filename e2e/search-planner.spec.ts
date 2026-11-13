@@ -207,7 +207,7 @@ test("mobile layout stays within the viewport and keeps the plan accessible", as
   ).toHaveAttribute("aria-pressed", "true");
 
   await page.getByRole("button", { name: /AMC Downtown/ }).first().click();
-  await expect(page.locator('p[role="alert"]')).toContainText("temporarily unavailable");
+  await expect(page.locator("main [role='alert']")).toContainText("temporarily unavailable");
   await expect(page.locator("#tonight").getByText("First Feature", { exact: true })).toBeVisible();
   await expect(page.locator("#tonight")).toContainText("First Feature");
   await expect(
@@ -252,8 +252,14 @@ test("restores preferred cinemas above the ZIP search and loads one without sear
     name: "Save AMC Midtown as preferred cinema",
   }).click();
   await expect(page.getByRole("button", {
-    name: "Remove AMC Midtown from preferred cinemas",
+    name: "Remove AMC Midtown from preferred cinema",
   })).toHaveAttribute("aria-pressed", "true");
+
+  await page.getByRole("button", { name: "Find a theatre" }).click();
+  const cinemaList = page.getByRole("region", { name: "Cinemas" });
+  await expect(cinemaList).toBeVisible();
+  await expect(page.getByRole("region", { name: "Preferred cinemas" })).toHaveCount(0);
+  await expect(cinemaList.getByText("AMC Midtown", { exact: true })).toHaveCount(1);
 
   await page.getByPlaceholder("ZIP code").fill("90210");
   await page.reload();
@@ -268,4 +274,97 @@ test("restores preferred cinemas above the ZIP search and loads one without sear
 
   await preferredSection.getByRole("button", { name: /AMC Midtown/ }).first().click();
   await expect(page.getByText("First Feature")).toBeVisible();
+});
+
+test("loads a preferred cinema for a selected date without requiring a ZIP", async ({
+  page,
+}) => {
+  const expectedDate = await page.evaluate(() => {
+    const nextMonth = new Date();
+    nextMonth.setDate(1);
+    nextMonth.setMonth(nextMonth.getMonth() + 1);
+    nextMonth.setDate(15);
+    return `${nextMonth.getFullYear()}-${String(nextMonth.getMonth() + 1).padStart(2, "0")}-${String(nextMonth.getDate()).padStart(2, "0")}`;
+  });
+  await page.addInitScript(() => {
+    localStorage.setItem("alistmax-preferred-cinemas-v1", JSON.stringify([{
+      id: "42",
+      name: "AMC Midtown",
+      address: "123 Broadway",
+      city: "New York",
+      state: "NY",
+    }]));
+  });
+  await page.route("**/api/showtimes?*", async (route) => {
+    const url = new URL(route.request().url());
+    await route.fulfill({
+      json: {
+        zip: url.searchParams.get("zip") ?? "",
+        date: url.searchParams.get("date"),
+        results: [],
+      },
+    });
+  });
+
+  await page.goto("/");
+  await expect(page.getByRole("region", { name: "Preferred cinemas" })).toBeVisible();
+  await page.getByRole("button", { name: "Choose date" }).click();
+  await page.getByRole("button", { name: "Next month" }).click();
+  await page.getByRole("button", { name: "15", exact: true }).click();
+  const request = page.waitForRequest((candidate) =>
+    candidate.url().includes("theatreId=42"),
+  );
+  await page.getByRole("region", { name: "Preferred cinemas" })
+    .getByRole("button", { name: /AMC Midtown/ })
+    .first()
+    .click();
+
+  const selectedTheatreRequest = new URL((await request).url());
+  expect(selectedTheatreRequest.searchParams.get("date")).toBe(expectedDate);
+  expect(selectedTheatreRequest.searchParams.has("zip")).toBe(false);
+  await expect(page.getByText("No screenings remain at this theatre for the selected date.")).toBeVisible();
+});
+
+test("automatically dismisses planning feedback", async ({ page }) => {
+  await page.clock.install();
+  await page.route("**/api/showtimes?*", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.get("mode") === "theatres") {
+      await route.fulfill({
+        json: {
+          zip: url.searchParams.get("zip"),
+          date: url.searchParams.get("date"),
+          theatres: [{
+            id: "42",
+            name: "AMC Midtown",
+            address: "123 Broadway",
+            city: "New York",
+            state: "NY",
+          }],
+        },
+      });
+      return;
+    }
+    await route.fulfill({
+      json: {
+        zip: url.searchParams.get("zip"),
+        date: url.searchParams.get("date"),
+        results,
+      },
+    });
+  });
+
+  await page.goto("/");
+  await page.getByPlaceholder("ZIP code").fill("10001");
+  await page.getByRole("button", { name: "Find a theatre" }).click();
+  await page.getByRole("button", { name: /AMC Midtown/ }).first().click();
+  await page.getByRole("button", { name: "Schedule options" }).click();
+  await page.getByLabel("Busy from").fill("00:00");
+  await page.getByLabel("Until").fill("23:59");
+  await page.getByRole("button", { name: "Add a random movie" }).click();
+  const alert = page.locator("main [role='alert']");
+  await expect(alert).toContainText("No eligible movies are available outside your blocked time.");
+
+  await page.clock.fastForward(6_000);
+  await expect(alert).toHaveCount(0);
 });
